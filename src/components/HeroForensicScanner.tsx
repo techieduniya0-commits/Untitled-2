@@ -124,7 +124,7 @@ export function HeroAmbientParticles({ reducedMotion }: { reducedMotion: boolean
     const particles: Particle[] = [];
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
       width = rect.width;
       height = rect.height;
@@ -132,7 +132,7 @@ export function HeroAmbientParticles({ reducedMotion }: { reducedMotion: boolean
       canvas.height = Math.max(1, Math.floor(height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const targetCount = width < 768 ? 10 : 22;
+      const targetCount = width < 768 ? 16 : 32;
       if (particles.length !== targetCount) {
         particles.length = 0;
         for (let i = 0; i < targetCount; i++) {
@@ -152,26 +152,26 @@ export function HeroAmbientParticles({ reducedMotion }: { reducedMotion: boolean
 
     resize();
 
-    let t = 0;
-    let lastDraw = 0;
-    const tick = (now: number) => {
-      rafId = 0;
-      if (!isVisible) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        isVisible = entries[0]?.isIntersecting ?? true;
+      },
+      { threshold: 0.05 },
+    );
+    observer.observe(canvas);
+    window.addEventListener('resize', resize, { passive: true });
 
-      // Throttle to ~30fps — calm ambient dust looks identical while halving CPU/GPU load
-      if (now - lastDraw >= 32 && width > 0 && height > 0) {
-        lastDraw = now;
-        t += 0.018;
+    let t = 0;
+    const tick = () => {
+      if (isVisible && width > 0 && height > 0) {
+        t += 0.009;
         ctx.clearRect(0, 0, width, height);
 
-        const drawLinks = width >= 768;
-        const linkDist = 104;
-        const linkDistSq = linkDist * linkDist;
-
+        const linkDist = width < 768 ? 72 : 112;
         for (let i = 0; i < particles.length; i++) {
           const a = particles[i];
-          a.x += a.vx * 1.8;
-          a.y += a.vy * 1.8;
+          a.x += a.vx;
+          a.y += a.vy;
           if (a.y < -12) {
             a.y = height + 12;
             a.x = Math.random() * width;
@@ -179,22 +179,20 @@ export function HeroAmbientParticles({ reducedMotion }: { reducedMotion: boolean
           if (a.x < -12) a.x = width + 12;
           if (a.x > width + 12) a.x = -12;
 
-          if (drawLinks) {
-            for (let j = i + 1; j < particles.length; j++) {
-              const b = particles[j];
-              const dx = a.x - b.x;
-              const dy = a.y - b.y;
-              const distSq = dx * dx + dy * dy;
-              if (distSq < linkDistSq) {
-                const dist = Math.sqrt(distSq);
-                const lineAlpha = (1 - dist / linkDist) * 0.11;
-                ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);
-                ctx.strokeStyle = `rgba(96, 165, 250, ${lineAlpha.toFixed(3)})`;
-                ctx.lineWidth = 0.7;
-                ctx.stroke();
-              }
+          for (let j = i + 1; j < particles.length; j++) {
+            const b = particles[j];
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq < linkDist * linkDist) {
+              const dist = Math.sqrt(distSq);
+              const lineAlpha = (1 - dist / linkDist) * 0.11;
+              ctx.beginPath();
+              ctx.moveTo(a.x, a.y);
+              ctx.lineTo(b.x, b.y);
+              ctx.strokeStyle = `rgba(96, 165, 250, ${lineAlpha.toFixed(3)})`;
+              ctx.lineWidth = 0.7;
+              ctx.stroke();
             }
           }
 
@@ -207,42 +205,13 @@ export function HeroAmbientParticles({ reducedMotion }: { reducedMotion: boolean
           ctx.fill();
         }
       }
-
-      if (isVisible) {
-        rafId = window.requestAnimationFrame(tick);
-      }
+      rafId = window.requestAnimationFrame(tick);
     };
 
-    const startLoop = () => {
-      if (rafId === 0 && isVisible) {
-        rafId = window.requestAnimationFrame(tick);
-      }
-    };
-
-    const stopLoop = () => {
-      if (rafId !== 0) {
-        window.cancelAnimationFrame(rafId);
-        rafId = 0;
-      }
-    };
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        isVisible = entries[0]?.isIntersecting ?? true;
-        if (isVisible) {
-          startLoop();
-        } else {
-          stopLoop();
-        }
-      },
-      { threshold: 0.02 },
-    );
-    observer.observe(canvas);
-    window.addEventListener('resize', resize, { passive: true });
-    startLoop();
+    rafId = window.requestAnimationFrame(tick);
 
     return () => {
-      stopLoop();
+      window.cancelAnimationFrame(rafId);
       window.removeEventListener('resize', resize);
       observer.disconnect();
     };
@@ -274,8 +243,6 @@ export function HeroForensicScanner({
   const [manualLockUntil, setManualLockUntil] = useState<number>(0);
   const [imgError, setImgError] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [inView, setInView] = useState(true);
-  const scannerContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -286,20 +253,7 @@ export function HeroForensicScanner({
   }, []);
 
   useEffect(() => {
-    const el = scannerContainerRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        setInView(entries[0]?.isIntersecting ?? true);
-      },
-      { threshold: 0.05 },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (reducedMotion || !inView) return;
+    if (reducedMotion) return;
 
     const currentDuration = SCAN_STAGES[stage].durationMs;
     const now = Date.now();
@@ -310,7 +264,7 @@ export function HeroForensicScanner({
     }, currentDuration + extraDelay);
 
     return () => window.clearTimeout(timer);
-  }, [stage, manualLockUntil, reducedMotion, inView]);
+  }, [stage, manualLockUntil, reducedMotion]);
 
   const handleSelectStage = (idx: ScanStageIndex) => {
     setStage(idx);
@@ -365,7 +319,7 @@ export function HeroForensicScanner({
   const frontLayerZ = (isExploded ? 76 : isInspecting ? 34 : 4) * zScale;
 
   return (
-    <div ref={scannerContainerRef} className="relative w-full flex flex-col items-center">
+    <div className="relative w-full flex flex-col items-center">
       {/* Soft Pale-Blue & Lavender Studio Aura Behind Scanner */}
       <div
         aria-hidden="true"

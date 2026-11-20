@@ -248,26 +248,18 @@ export function HistoryView({
                         {(item.status === 'completed' || item.status === 'partially_completed') &&
                         item.scoring
                           ? `${item.scoring.aiLikelihoodScore}/100`
-                          : item.status === 'needs_context'
-                            ? 'Pending'
-                            : item.status === 'processing'
-                              ? 'Running'
-                              : 'Failed'}
+                          : item.status === 'processing'
+                            ? 'Running'
+                            : 'Failed'}
                       </td>
-                      <td
-                        className={`py-3.5 px-4 text-xs font-medium whitespace-nowrap ${
-                          item.status === 'needs_context' ? 'text-[#6D28D9]' : tone.text
-                        }`}
-                      >
+                      <td className={`py-3.5 px-4 text-xs font-medium whitespace-nowrap ${tone.text}`}>
                         {item.status === 'completed'
-                          ? `${item.scoring?.classification ?? 'Inconclusive'}${item.isUpdatedReport ? ' · Updated' : ''}`
+                          ? item.scoring?.classification ?? 'Inconclusive'
                           : item.status === 'partially_completed'
                             ? `${item.scoring?.classification ?? 'Inconclusive'} · Partial`
-                            : item.status === 'needs_context'
-                              ? 'Follow-up needed'
-                              : item.status === 'processing'
-                                ? 'Processing'
-                                : 'Failed'}
+                            : item.status === 'processing'
+                              ? 'Processing'
+                              : 'Failed'}
                       </td>
                       <td className="py-3.5 px-4 text-xs text-[#64748B] whitespace-nowrap">
                         {item.scoring?.evidenceStrength ?? '--'}

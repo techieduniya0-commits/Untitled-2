@@ -15,6 +15,7 @@ import { DashboardView } from './components/DashboardView';
 import { DatasetManagerView } from './components/DatasetManagerView';
 import { ForensicReportView } from './components/ForensicReportView';
 import { GlobalAmbientCanvas } from './components/GlobalAmbientCanvas';
+import { GlobalMagnifier } from './components/GlobalMagnifier';
 import { HistoryView } from './components/HistoryView';
 import { LandingPage } from './components/LandingPage';
 import { SettingsView } from './components/SettingsView';
@@ -179,19 +180,9 @@ export default function App() {
     }
   }, [inWorkspace, fetchAnalyses, fetchSettings]);
 
-  // If user refreshes directly on /workspace/report/:id and record isn't cached yet, hydrate it from server.
-  // Never show a premature report when an analysis is still processing or awaiting follow-up context.
+  // If user refreshes directly on /workspace/report/:id and record isn't cached yet, hydrate it from server
   useEffect(() => {
-    if (activeTab !== 'report-detail' || !selectedReportId) return;
-    if (selectedReport) {
-      if (selectedReport.status === 'processing' || selectedReport.status === 'needs_context') {
-        setActiveAnalysisId(selectedReport.id);
-        setSelectedReportId(null);
-        setActiveTab('analysis-live');
-        pushRoute(true, 'analysis-live', selectedReport.id);
-      }
-      return;
-    }
+    if (activeTab !== 'report-detail' || !selectedReportId || selectedReport) return;
     let active = true;
     void apiRequest<{ analysis?: AnalysisRecord }>(
       `/api/analyses/${encodeURIComponent(selectedReportId)}`,
@@ -200,7 +191,7 @@ export default function App() {
         if (!active || !data.analysis) return;
         const rec = data.analysis;
         setAnalyses((prev) => mergeAnalysesLists(prev, [rec]));
-        if (rec.status === 'processing' || rec.status === 'needs_context') {
+        if (rec.status === 'processing') {
           setActiveAnalysisId(rec.id);
           setSelectedReportId(null);
           setActiveTab('analysis-live');
@@ -474,6 +465,9 @@ export default function App() {
       {/* Continuous Pale-Blue & White Mixed Gradient Across Every Page and Section */}
       <GlobalAmbientCanvas />
 
+      {/* Ultra-Smooth Global Optical Magnifying Glass */}
+      <GlobalMagnifier />
+
       {!inWorkspace ? (
         <LandingPage onEnterWorkspace={handleEnterWorkspace} />
       ) : (
@@ -485,9 +479,9 @@ export default function App() {
         >
           <motion.div
             key={`${activeTab}-${activeAnalysisId ?? ''}-${selectedReportId ?? ''}`}
-            initial={prefersReducedMotion ? false : { opacity: 0, y: 5 }}
+            initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: MOTION_DURATION.fast, ease: MOTION_EASE.apple }}
+            transition={{ duration: MOTION_DURATION.fast + 0.1, ease: MOTION_EASE.apple }}
           >
             {appError && (
               <div
@@ -651,7 +645,6 @@ export default function App() {
                 }}
                 onSaveToDataset={handleSaveAnalysisToDataset}
                 onRetryAnalysis={handleRetryAnalysis}
-                onAnalysisUpdated={handleAnalysisUpdated}
               />
             )}
 

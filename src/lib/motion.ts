@@ -13,12 +13,12 @@ export const MOTION_EASE = {
 };
 
 export const MOTION_DURATION = {
-  fast: 0.18,
-  base: 0.32,
-  slow: 0.52,
+  fast: 0.2,
+  base: 0.52,
+  slow: 0.82,
 } as const;
 
 export const SCROLL_VIEWPORT = {
   once: true,
-  amount: 0.05,
+  amount: 0.16,
 } as const;

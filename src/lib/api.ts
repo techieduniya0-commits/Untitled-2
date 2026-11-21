@@ -239,7 +239,7 @@ export function uploadSingleFileWithProgress(
     const xhr = new XMLHttpRequest();
     xhr.open('POST', endpoint);
     xhr.setRequestHeader('Accept', 'application/json');
-    xhr.timeout = options.timeoutMs ?? 65_000;
+    xhr.timeout = options.timeoutMs ?? 180_000;
 
     const onAbort = () => xhr.abort();
     if (options.signal) {

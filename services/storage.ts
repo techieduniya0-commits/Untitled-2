@@ -63,7 +63,7 @@ export const DATASET_CSV_COLUMNS: Array<keyof DatasetRecord> = [
 const DEFAULT_SETTINGS: AppSettings = {
   retainOriginalMediaHours: 24,
   videoFrameSampleCount: 6,
-  maxUploadSizeMb: 50,
+  maxUploadSizeMb: 150,
   storageBackend: IS_SERVERLESS
     ? 'Serverless temporary storage (/tmp/truthlens-data)'
     : 'Local server filesystem JSON persistence (./data)',

@@ -317,6 +317,50 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
     aiLikelihoodScore = Math.round(rawAggregate * 0.68 + 50 * 0.32);
   }
 
+  const pretrainedAudioDetector = completed.find(
+    (d) => d.id === 'pretrained_audio_deepfake_classifier' && d.rawSignalScore !== null,
+  );
+  const failedPretrainedAudio = failed.find(
+    (d) => d.id === 'pretrained_audio_deepfake_classifier',
+  );
+  const isAudioPipeline = detectors.some(
+    (d) =>
+      d.id === 'pretrained_audio_deepfake_classifier' ||
+      d.id === 'ai_speech_classification' ||
+      d.id === 'audio_spectral_analysis',
+  );
+  const audioAiGroups = isAudioPipeline ? groupScores.filter((g) => g.polarity === 'ai_indicator') : [];
+  const audioEncoderAiMatch =
+    isAudioPipeline &&
+    completed.some((d) => d.id === 'audio_metadata_inspection' && (d.rawSignalScore ?? 0) >= 72);
+  let audioSingleIndicatorCapped = false;
+  let audioMultiIndicatorBoost = 0;
+
+  if (isAudioPipeline && pretrainedAudioDetector && pretrainedAudioDetector.rawSignalScore !== null) {
+    // Primary trained Wav2Vec2 audio classifier ran successfully: preserve its raw aggregated score cleanly
+    // without artificial shrinkage toward 50 or overriding it with uncalibrated heuristics.
+    aiLikelihoodScore = audioEncoderAiMatch
+      ? Math.min(95, Math.max(pretrainedAudioDetector.rawSignalScore, Math.round(rawAggregate)))
+      : pretrainedAudioDetector.rawSignalScore;
+  } else if (isAudioPipeline && failedPretrainedAudio && !audioEncoderAiMatch) {
+    // Technical failure in primary audio classifier -> strictly neutral 50/100 (Inconclusive)
+    aiLikelihoodScore = 50;
+  } else if (isAudioPipeline && !visibleAiWatermark && !c2paAiClaim) {
+    if (audioAiGroups.length === 1 && aiIndicatorDetectors.length === 1 && !audioEncoderAiMatch) {
+      if (aiLikelihoodScore > 58) {
+        aiLikelihoodScore = 58;
+        audioSingleIndicatorCapped = true;
+      }
+    } else if (
+      aiIndicatorDetectors.length >= 2 &&
+      audioAiGroups.length >= 2 &&
+      conflictingFindings.length === 0
+    ) {
+      audioMultiIndicatorBoost = aiIndicatorDetectors.length >= 3 ? 10 : 6;
+      aiLikelihoodScore = Math.min(94, aiLikelihoodScore + audioMultiIndicatorBoost);
+    }
+  }
+
   // Only strong watermark or provenance evidence can elevate floor — never claiming 100%
   if (visibleAiWatermark && aiLikelihoodScore < 74) {
     aiLikelihoodScore = Math.min(94, Math.max(aiLikelihoodScore, 78));
@@ -337,7 +381,8 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
   const overallReliability: 'Low' | 'Moderate' | 'High' =
     totalWeight === 0
       ? 'Low'
-      : avgRel >= 0.72 && completenessPercent >= 70 && failed.length === 0 && providerCount >= 2
+      : (avgRel >= 0.72 && completenessPercent >= 70 && failed.length === 0 && providerCount >= 2) ||
+          (Boolean(pretrainedAudioDetector) && failed.length === 0)
         ? 'High'
         : avgRel >= 0.45 && completenessPercent >= 45
           ? 'Moderate'
@@ -351,15 +396,21 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
   if (totalWeight === 0) {
     evidenceStrength = 'Low';
   } else if (
-    (visibleAiWatermark || c2paAiClaim || (strongSignals >= 2 && providerCount >= 2)) &&
-    independentCount >= 2 &&
+    (visibleAiWatermark ||
+      c2paAiClaim ||
+      (pretrainedAudioDetector && pretrainedAudioDetector.evidenceStrength === 'Strong' && conflictingFindings.length === 0) ||
+      (strongSignals >= 2 && providerCount >= 2) ||
+      (isAudioPipeline && aiIndicatorDetectors.length >= 3 && audioAiGroups.length >= 3 && conflictingFindings.length === 0)) &&
     conflictingFindings.length === 0
   ) {
     evidenceStrength = 'Strong';
   } else if (
-    (independentCount >= 2 || scoredCompleted.length >= 2) &&
-    conflictingFindings.length === 0 &&
-    (aiIndicatorDetectors.length >= 2 || naturalCaptureDetectors.length >= 2 || strongSignals >= 1)
+    (Boolean(pretrainedAudioDetector) &&
+      pretrainedAudioDetector!.evidenceStrength !== 'Low' &&
+      conflictingFindings.length === 0) ||
+    ((independentCount >= 2 || scoredCompleted.length >= 2) &&
+      conflictingFindings.length === 0 &&
+      (aiIndicatorDetectors.length >= 2 || naturalCaptureDetectors.length >= 2 || strongSignals >= 1))
   ) {
     evidenceStrength = 'Moderate';
   } else {
@@ -368,10 +419,30 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
 
   // Recalibrated classification logic: strict anti-false-positive discipline
   let classification: Classification = 'Inconclusive';
-  const hasDocumentPipeline = completed.some((d) => d.category === 'linguistic');
+  const hasDocumentPipeline = completed.some(
+    (d) =>
+      d.category === 'linguistic' &&
+      !isAudioPipeline &&
+      (d.id.includes('stylometry') ||
+        d.id.includes('burstiness') ||
+        d.id.includes('ngram') ||
+        d.id.includes('linguistic') ||
+        d.id.includes('document')),
+  );
   const hasStrongProvenanceAi = Boolean(visibleAiWatermark || c2paAiClaim);
 
   if (totalWeight === 0) {
+    classification = 'Inconclusive';
+  } else if (pretrainedAudioDetector && pretrainedAudioDetector.rawSignalScore !== null) {
+    // Map directly from the primary trained Wav2Vec2 audio classifier thresholds (>62 synthetic, <38 genuine, 38-62 inconclusive)
+    if (aiLikelihoodScore > 62) {
+      classification = 'Likely AI-generated';
+    } else if (aiLikelihoodScore < 38) {
+      classification = 'Likely human-created';
+    } else {
+      classification = 'Inconclusive';
+    }
+  } else if (audioSingleIndicatorCapped) {
     classification = 'Inconclusive';
   } else if (
     conflictingFindings.length > 0 &&
@@ -388,10 +459,10 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
   ) {
     classification = 'Potentially manipulated';
   } else if (
-    aiLikelihoodScore >= 72 &&
+    aiLikelihoodScore >= 70 &&
     (hasStrongProvenanceAi ||
       (aiIndicatorDetectors.length >= 2 && conflictingFindings.length === 0) ||
-      (aiLikelihoodScore >= 80 && conflictingFindings.length === 0))
+      (!isAudioPipeline && aiLikelihoodScore >= 80 && conflictingFindings.length === 0))
   ) {
     classification =
       hasDocumentPipeline && evidenceStrength !== 'Strong'
@@ -417,10 +488,22 @@ export function aggregateForensicEvidence(detectors: DetectorResult[]): ScoringB
 
   const scoreExplanation: string[] = [
     `Pipeline completeness: ${completenessPercent}% (${completed.length} of ${applicableTotal} applicable detectors ran; ${unavailable.length} unavailable and ${failed.length} failed excluded rather than defaulted to zero).`,
-    `Aggregated ${groupScores.length} correlation group(s) across ${providerCount} signal provider(s) with exponential decay (100% → 50% → 25%) to prevent correlated double-counting.`,
+    pretrainedAudioDetector
+      ? `Primary classification is driven by the pretrained Wav2Vec2 audio anti-spoofing classifier (${pretrainedAudioDetector.rawSignalScore}/100 raw uncalibrated score); supporting acoustic descriptors (frequency bands, pitch, prosody, noise floor, splice checks) are informational context only.`
+      : `Aggregated ${groupScores.length} correlation group(s) across ${providerCount} signal provider(s) with exponential decay (100% → 50% → 25%) to prevent correlated double-counting.`,
     `Evidence polarity split: ${evidenceSupportingAi.length} AI-supporting indicator(s), ${evidenceSupportingNaturalCapture.length} natural-capture observation(s), and ${neutralObservations.length} neutral/informational observation(s).`,
   ];
 
+  if (audioMultiIndicatorBoost > 0) {
+    scoreExplanation.push(
+      `Multi-indicator synthetic speech corroboration: ${aiIndicatorDetectors.length} independent audio indicators aligned without conflict, increasing AI-generated speech confidence by +${audioMultiIndicatorBoost} points.`,
+    );
+  }
+  if (audioSingleIndicatorCapped) {
+    scoreExplanation.push(
+      'Single-indicator audio safeguard applied: only one audio cue was elevated without corroboration, so the score was capped at 58/100 (Inconclusive) rather than automatically labeling the recording as AI-generated.',
+    );
+  }
   if (failed.length > 0) {
     scoreExplanation.push(
       `${failed.length} detector(s) failed due to temporary upstream unavailability and were excluded from scoring (API failures are never treated as evidence of AI generation).`,

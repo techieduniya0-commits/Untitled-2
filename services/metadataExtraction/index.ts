@@ -46,8 +46,20 @@ export async function runFfprobe(filePath: string): Promise<Record<string, unkno
   try {
     const { stdout } = await execFileAsync(
       'ffprobe',
-      ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
-      { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 },
+      [
+        '-v',
+        'quiet',
+        '-analyzeduration',
+        '20000000',
+        '-probesize',
+        '20000000',
+        '-print_format',
+        'json',
+        '-show_format',
+        '-show_streams',
+        filePath,
+      ],
+      { timeout: 25_000, maxBuffer: 8 * 1024 * 1024 },
     );
     return JSON.parse(stdout) as Record<string, unknown>;
   } catch {
@@ -149,7 +161,12 @@ export async function extractMetadataForFile(
     if (probe) {
       const format = (probe.format ?? {}) as Record<string, unknown>;
       const streams = Array.isArray(probe.streams) ? (probe.streams as Array<Record<string, unknown>>) : [];
-      const videoStream = streams.find((s) => s.codec_type === 'video');
+      const videoStream =
+        streams.find(
+          (s) =>
+            s.codec_type === 'video' &&
+            !((s.disposition as Record<string, unknown> | undefined)?.attached_pic),
+        ) ?? streams.find((s) => s.codec_type === 'video');
       const audioStream = streams.find((s) => s.codec_type === 'audio');
       const tags = (format.tags ?? {}) as Record<string, string>;
       const videoTags = (videoStream?.tags ?? {}) as Record<string, string>;
@@ -158,11 +175,33 @@ export async function extractMetadataForFile(
         if (typeof v === 'string') mergedTags[k] = v.slice(0, 200);
       }
 
-      base.containerFormat = typeof format.format_long_name === 'string' ? format.format_long_name : String(format.format_name ?? '');
-      base.durationSeconds = format.duration ? Number(Number(format.duration).toFixed(2)) : null;
-      base.videoBitrate = format.bit_rate ? Number(format.bit_rate) : videoStream?.bit_rate ? Number(videoStream.bit_rate) : null;
-      base.videoCodec = videoStream ? String(videoStream.codec_long_name || videoStream.codec_name || '') : null;
-      base.audioCodec = audioStream ? String(audioStream.codec_long_name || audioStream.codec_name || '') : 'None detected';
+      const rawDuration =
+        format.duration ?? videoStream?.duration ?? audioStream?.duration ?? null;
+      const parsedDuration = rawDuration !== null ? Number(rawDuration) : NaN;
+
+      base.containerFormat =
+        typeof format.format_long_name === 'string'
+          ? format.format_long_name
+          : String(format.format_name ?? '');
+      base.durationSeconds =
+        Number.isFinite(parsedDuration) && parsedDuration > 0
+          ? Number(parsedDuration.toFixed(2))
+          : null;
+      base.videoBitrate = format.bit_rate
+        ? Number(format.bit_rate)
+        : videoStream?.bit_rate
+          ? Number(videoStream.bit_rate)
+          : null;
+      base.videoCodec = videoStream
+        ? String(videoStream.codec_long_name || videoStream.codec_name || '')
+        : null;
+      base.audioCodec = audioStream
+        ? String(audioStream.codec_long_name || audioStream.codec_name || '')
+        : 'None detected';
+      if (audioStream) {
+        base.sampleRate = audioStream.sample_rate ? Number(audioStream.sample_rate) : null;
+        base.audioChannels = audioStream.channels ? Number(audioStream.channels) : null;
+      }
       base.width = videoStream?.width ? Number(videoStream.width) : null;
       base.height = videoStream?.height ? Number(videoStream.height) : null;
       base.frameRate = parseFrameRate(
@@ -172,11 +211,12 @@ export async function extractMetadataForFile(
             ? videoStream.r_frame_rate
             : undefined,
       );
-      base.frameCount = videoStream?.nb_frames
-        ? Number(videoStream.nb_frames)
-        : base.durationSeconds && base.frameRate
-          ? Math.round(base.durationSeconds * base.frameRate)
-          : null;
+      base.frameCount =
+        videoStream?.nb_frames && Number.isFinite(Number(videoStream.nb_frames))
+          ? Number(videoStream.nb_frames)
+          : base.durationSeconds && base.frameRate
+            ? Math.round(base.durationSeconds * base.frameRate)
+            : null;
       base.encoder = mergedTags.encoder || mergedTags.ENCODER || mergedTags.handler_name || null;
       if (mergedTags.creation_time) {
         base.createdAt = mergedTags.creation_time;

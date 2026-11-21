@@ -67,29 +67,66 @@ interface UploadErrorState {
   suggestRefresh?: boolean;
 }
 
+const VIDEO_EXTENSIONS = new Set([
+  '.mp4',
+  '.mov',
+  '.m4v',
+  '.webm',
+  '.mkv',
+  '.avi',
+  '.mpeg',
+  '.mpg',
+  '.ogv',
+  '.3gp',
+  '.3g2',
+  '.flv',
+  '.f4v',
+  '.wmv',
+  '.asf',
+  '.ts',
+  '.mts',
+  '.m2ts',
+  '.vob',
+  '.divx',
+]);
+
+const AUDIO_EXTENSIONS = new Set([
+  '.wav',
+  '.mp3',
+  '.m4a',
+  '.ogg',
+  '.oga',
+  '.flac',
+  '.aac',
+  '.opus',
+  '.wma',
+  '.amr',
+  '.aiff',
+  '.aif',
+  '.weba',
+]);
+
 const SUPPORTED_EXTENSIONS = new Set([
   '.jpg',
   '.jpeg',
   '.png',
   '.webp',
-  '.mp4',
-  '.mov',
-  '.webm',
+  ...VIDEO_EXTENSIONS,
+  ...AUDIO_EXTENSIONS,
   '.pdf',
   '.docx',
   '.txt',
-  '.wav',
-  '.mp3',
-  '.m4a',
 ]);
 
 function detectClientMediaType(file: File): MediaType | null {
   const ext = `.${file.name.split('.').pop()?.toLowerCase() ?? ''}`;
-  if (!SUPPORTED_EXTENSIONS.has(ext)) return null;
+  const mimeLower = (file.type || '').toLowerCase();
   if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return 'image';
-  if (['.mp4', '.mov', '.webm'].includes(ext)) return 'video';
-  if (['.wav', '.mp3', '.m4a'].includes(ext)) return 'audio';
+  if (VIDEO_EXTENSIONS.has(ext) || mimeLower.startsWith('video/')) return 'video';
+  if (AUDIO_EXTENSIONS.has(ext) || mimeLower.startsWith('audio/')) return 'audio';
   if (ext === '.pdf') return 'pdf';
+  if (['.docx', '.txt'].includes(ext)) return 'document';
+  if (!SUPPORTED_EXTENSIONS.has(ext)) return null;
   return 'document';
 }
 
@@ -130,13 +167,33 @@ async function inspectClientHeaderSignature(
     }
 
     if (expectedType === 'video') {
-      if (ascii.slice(4, 8) === 'ftyp') return { ok: true, note: 'ISO BMFF / MP4 / MOV header verified' };
-      if (startsWith([0x1a, 0x45, 0xdf, 0xa3])) return { ok: true, note: 'WebM / EBML header verified' };
-      return {
-        ok: false,
-        note: 'Header mismatch',
-        error: `"${file.name}" does not have a recognized MP4, MOV, or WebM container signature.`,
-      };
+      const box = ascii.slice(4, 8);
+      if (['ftyp', 'moov', 'wide', 'free', 'mdat', 'skip', 'pnot'].includes(box)) {
+        return { ok: true, note: 'ISO BMFF / MP4 / MOV container verified' };
+      }
+      if (startsWith([0x1a, 0x45, 0xdf, 0xa3])) {
+        return { ok: true, note: 'WebM / MKV EBML container verified' };
+      }
+      if (ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'AVI ') {
+        return { ok: true, note: 'AVI RIFF container verified' };
+      }
+      if (ascii.startsWith('FLV')) {
+        return { ok: true, note: 'FLV video container verified' };
+      }
+      if (startsWith([0x30, 0x26, 0xb2, 0x75])) {
+        return { ok: true, note: 'WMV / ASF container verified' };
+      }
+      if (ascii.startsWith('OggS')) {
+        return { ok: true, note: 'OGV / Ogg container verified' };
+      }
+      if (startsWith([0x00, 0x00, 0x01])) {
+        return { ok: true, note: 'MPEG video stream verified' };
+      }
+      if (bytes[0] === 0x47) {
+        return { ok: true, note: 'MPEG-TS transport stream detected' };
+      }
+      // Defer less common containers to authoritative server FFprobe check rather than blocking valid formats
+      return { ok: true, note: 'Deferred to server FFprobe container verification' };
     }
 
     if (expectedType === 'audio') {
@@ -144,10 +201,16 @@ async function inspectClientHeaderSignature(
         return { ok: true, note: 'WAV RIFF header verified' };
       }
       if (ascii.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) {
-        return { ok: true, note: 'MP3 audio header verified' };
+        return { ok: true, note: 'MP3 / AAC audio header verified' };
       }
       if (ascii.slice(4, 8) === 'ftyp') {
         return { ok: true, note: 'M4A / MP4 audio header verified' };
+      }
+      if (ascii.startsWith('OggS')) {
+        return { ok: true, note: 'OGG / Opus audio header verified' };
+      }
+      if (ascii.startsWith('fLaC')) {
+        return { ok: true, note: 'FLAC lossless audio header verified' };
       }
       return { ok: true, note: 'Deferred to server FFprobe & magic check' };
     }
@@ -188,18 +251,18 @@ function plannedMethodsForType(type: MediaType): string[] {
       ];
     case 'video':
       return [
-        'FFprobe stream/codec & GOP I/P/B structure inspection',
-        'FFmpeg multi-frame sampling with full frame count disclosure',
-        'Bhattacharyya histogram similarity & inter-frame delta',
+        'FFprobe stream/codec & GOP I/P/B structure inspection (all video formats)',
+        'Resilient FFmpeg RGB frame sampling (8-bit/10-bit/HDR safe)',
+        'Independent FFmpeg audio track extraction + Wav2Vec2 deepfake voice detector',
         'Cross-frame visible watermark tracking + cropped evidence capture',
         'Temporal, lighting & facial consistency review',
       ];
     case 'audio':
       return [
-        '16 kHz PCM waveform & DFT spectral centroid',
-        'Dynamic range, silence ratio & clipping analysis',
-        'Multimodal speech, prosody & vocoder artifact review',
-        'Audio container & encoder metadata inspection',
+        'Pretrained Wav2Vec2 audio deepfake classifier (16 kHz mono overlapping 4s segments)',
+        'Documented speech-active segment aggregation & raw uncalibrated score disclosure',
+        'Supporting signals: multi-band spectral ratios, F0 pitch/pauses, splice & codec inspection',
+        'Grounded explanation layer (explains actual detector outputs only)',
       ];
     case 'pdf':
       return [
@@ -350,7 +413,7 @@ export function UploadWorkspace({
       if (!type) {
         firstError = firstError ?? {
           category: 'Unsupported format',
-          message: `"${file.name}" is not a supported format. Allowed: JPG, JPEG, PNG, WEBP, MP4, MOV, WEBM, PDF, DOCX, TXT, WAV, MP3, M4A.`,
+          message: `"${file.name}" is not a supported format. Allowed: Images (JPG, PNG, WEBP), Videos (MP4, MOV, M4V, WEBM, MKV, AVI, MPEG, MPG, OGV, 3GP, FLV, WMV, TS), Audio (WAV, MP3, M4A, OGG, FLAC, AAC, OPUS, WMA), Documents (PDF, DOCX, TXT).`,
           retryable: false,
         };
         continue;
@@ -634,7 +697,7 @@ export function UploadWorkspace({
           ref={inputRef}
           type="file"
           multiple
-          accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.webm,.pdf,.docx,.txt,.wav,.mp3,.m4a"
+          accept="image/jpeg,image/png,image/webp,video/*,audio/*,.jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.webm,.mkv,.avi,.mpeg,.mpg,.ogv,.3gp,.3g2,.flv,.f4v,.wmv,.asf,.ts,.mts,.m2ts,.vob,.pdf,.docx,.txt,.wav,.mp3,.m4a,.ogg,.oga,.flac,.aac,.opus,.wma,.amr,.aiff,.weba"
           onChange={(e) => {
             if (e.target.files?.length) {
               const selected = Array.from(e.target.files);
@@ -653,8 +716,8 @@ export function UploadWorkspace({
           Drag and drop media files here, or browse from your device
         </p>
         <p className="mt-1.5 text-xs text-[#52607A]">
-          Images (JPG, JPEG, PNG, WEBP) · Videos (MP4, MOV, WEBM) · Documents (PDF, DOCX, TXT) ·
-          Audio (WAV, MP3, M4A)
+          Images (JPG, PNG, WEBP) · Videos (MP4, MOV, MKV, WEBM, AVI, M4V, MPEG, FLV, WMV, 3GP, TS) ·
+          Audio (WAV, MP3, M4A, OGG, FLAC, AAC, OPUS) · Documents (PDF, DOCX, TXT)
         </p>
         <p className="mt-1 text-xs font-mono tabular-nums text-[#64748B]">
           Up to 6 files per batch · Independent per-file transfer · Max {maxUploadSizeMb} MB per

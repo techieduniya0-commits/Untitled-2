@@ -8,6 +8,7 @@ import 'dotenv/config';
 import express, { type Express } from 'express';
 import multer from 'multer';
 import type { DatasetRecord, SystemCapabilities } from '../src/types/forensics.ts';
+import { getConfiguredAudioClassifier } from './audioDetection/classifier.ts';
 import { evaluateBenchmarkDataset } from './evaluationEngine.ts';
 import { GEMINI_FORENSIC_MODEL, isGeminiConfigured } from './geminiClient.ts';
 import {
@@ -15,6 +16,7 @@ import {
   executeForensicPipeline,
   PipelineRetryError,
   retryAnalysisPipeline,
+  submitFollowUpAndReanalyse,
 } from './orchestrator.ts';
 import {
   deleteAnalysis,
@@ -51,6 +53,7 @@ export async function detectSystemCapabilities(): Promise<SystemCapabilities> {
     checkBin('ffmpeg'),
     checkBin('ffprobe'),
   ]);
+  const audioClassifier = getConfiguredAudioClassifier();
   return {
     ffmpegAvailable,
     ffprobeAvailable,
@@ -62,6 +65,8 @@ export async function detectSystemCapabilities(): Promise<SystemCapabilities> {
       ? 'Serverless temporary storage (/tmp/truthlens-data)'
       : 'Local server filesystem JSON persistence (./data)',
     geminiModel: GEMINI_FORENSIC_MODEL,
+    audioDeepfakeClassifierAvailable: ffmpegAvailable,
+    audioDeepfakeModel: `${audioClassifier.modelId} [${audioClassifier.license}]`,
   };
 }
 
@@ -417,6 +422,37 @@ export function createApiApp(): Express {
     }),
   );
 
+  // Submit interactive follow-up answers & user statement and generate transparent updated report
+  app.post(
+    '/api/analyses/:id/followup',
+    asyncHandler(async (req, res) => {
+      try {
+        const body = req.body ?? {};
+        const analysis = await submitFollowUpAndReanalyse({
+          analysisId: req.params.id,
+          answers: Array.isArray(body.answers) ? body.answers : [],
+          userStatement: typeof body.userStatement === 'string' ? body.userStatement : '',
+          rerunAutomatedDetectors: Boolean(body.rerunAutomatedDetectors),
+        });
+        res.status(200).json({
+          ok: true,
+          mode: 'sync',
+          analysis,
+        });
+      } catch (e) {
+        if (e instanceof PipelineRetryError) {
+          res.status(e.statusCode).json({ ok: false, error: e.message, code: e.code });
+          return;
+        }
+        res.status(500).json({
+          ok: false,
+          error: e instanceof Error ? e.message : 'Unable to reanalyse with follow-up context.',
+          code: 'FOLLOWUP_ERROR',
+        });
+      }
+    }),
+  );
+
   // Delete analysis and purge stored media
   app.delete(
     '/api/analyses/:id',
@@ -494,6 +530,24 @@ export function createApiApp(): Express {
       res.sendFile(cropPath);
     } catch {
       res.status(404).json({ error: 'Watermark crop image not found.' });
+    }
+  });
+
+  // Serve extracted 16 kHz mono WAV audio track for video analyses
+  app.get('/api/analyses/:id/audio', async (req, res) => {
+    const audioPath = path.join(
+      UPLOADS_DIR,
+      path.basename(req.params.id),
+      'audio',
+      'extracted_audio.wav',
+    );
+    try {
+      await fs.access(audioPath);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Type', 'audio/wav');
+      res.sendFile(audioPath);
+    } catch {
+      res.status(404).json({ error: 'Extracted audio track not found.' });
     }
   });
 

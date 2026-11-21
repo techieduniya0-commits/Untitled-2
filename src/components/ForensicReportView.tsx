@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -12,11 +13,15 @@ import {
   ExternalLink,
   FileJson,
   Info,
+  MessageSquarePlus,
   MinusCircle,
   Play,
   RefreshCw,
   ScanEye,
+  ShieldAlert,
+  Sparkles,
   Upload,
+  UserCheck,
   XCircle,
 } from 'lucide-react';
 import {
@@ -36,6 +41,7 @@ import {
   formatDateTime,
   mediaTypeLabel,
 } from '../lib/formatters';
+import { FollowUpContextPanel } from './FollowUpContextPanel';
 
 interface ForensicReportViewProps {
   analysis: AnalysisRecord;
@@ -43,6 +49,7 @@ interface ForensicReportViewProps {
   onNewUpload?: () => void;
   onSaveToDataset: (analysis: AnalysisRecord) => Promise<void>;
   onRetryAnalysis?: (id: string) => Promise<void>;
+  onAnalysisUpdated?: (updated: AnalysisRecord) => void;
 }
 
 export function ForensicReportView({
@@ -51,11 +58,13 @@ export function ForensicReportView({
   onNewUpload,
   onSaveToDataset,
   onRetryAnalysis,
+  onAnalysisUpdated,
 }: ForensicReportViewProps) {
   const [copied, setCopied] = useState(false);
   const [savedToDataset, setSavedToDataset] = useState(false);
   const [savingDataset, setSavingDataset] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [showFollowUpDrawer, setShowFollowUpDrawer] = useState(false);
   const [expandedDetectorId, setExpandedDetectorId] = useState<string | null>(null);
   const [selectedFrame, setSelectedFrame] = useState<VideoFrameSample | null>(
     analysis.videoFrames?.[0] ?? null,
@@ -371,6 +380,20 @@ export function ForensicReportView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onAnalysisUpdated && (
+            <button
+              type="button"
+              onClick={() => setShowFollowUpDrawer((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                showFollowUpDrawer
+                  ? 'bg-[#F3F0FF] text-[#5B21B6] border-[#C4B5FD]'
+                  : 'text-[#5B21B6] bg-white hover:bg-[#F5F3FF] border-[#DDD6FE]'
+              }`}
+            >
+              <MessageSquarePlus className="w-3.5 h-3.5" />
+              {analysis.isUpdatedReport ? 'Update context & reanalyse' : 'Add context & reanalyse'}
+            </button>
+          )}
           {onNewUpload && (
             <button
               type="button"
@@ -426,6 +449,19 @@ export function ForensicReportView({
           </button>
         </div>
       </div>
+
+      {/* Optional Follow-Up Context Drawer */}
+      {showFollowUpDrawer && (
+        <FollowUpContextPanel
+          record={analysis}
+          mode="optional"
+          onCancel={() => setShowFollowUpDrawer(false)}
+          onReanalysisComplete={(updated) => {
+            setShowFollowUpDrawer(false);
+            onAnalysisUpdated?.(updated);
+          }}
+        />
+      )}
 
       {/* Partial Forensic Report Disclosure Banner */}
       {isPartialReport && (
@@ -600,6 +636,185 @@ export function ForensicReportView({
               high-stakes decisions with provenance checks, original source verification, and human
               review.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Updated Report & Reanalysis Transparency Section (Original vs Updated + Separated User Context) */}
+      {analysis.isUpdatedReport && analysis.reanalysisSummary && analysis.userContext && (
+        <div className="tl-glass-panel rounded-2xl overflow-hidden border-[#C4B5FD]/80">
+          <div className="px-6 py-4 bg-gradient-to-r from-[#EFF6FF]/85 via-[#F5F3FF]/85 to-white border-b border-[#DDD6FE]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#2563EB] to-[#7C3AED] flex items-center justify-center text-white shrink-0 mt-0.5">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-[#172554]">
+                  Updated Forensic Report — Reanalysis &amp; User Context Disclosure
+                </h2>
+                <p className="text-xs text-[#52607A] mt-0.5">
+                  Updated {formatDateTime(analysis.reanalysisSummary.updatedAt)} · Preserves
+                  original automated findings alongside your submitted context and statement.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-mono uppercase tracking-wider font-semibold text-[#5B21B6] bg-white/90 border border-[#DDD6FE] rounded-lg px-2.5 py-1 whitespace-nowrap self-start sm:self-center">
+              Updated Report
+            </span>
+          </div>
+
+          <div className="p-6 space-y-6">
+            {/* Original vs Updated Comparison Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-xl bg-[#F8FAFF] border border-[#DCE8F8] p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#52607A]">
+                  AI-Likelihood Score
+                </p>
+                <div className="mt-2 flex items-center gap-2 font-mono tabular-nums text-sm">
+                  <span className="text-[#64748B]">
+                    {analysis.reanalysisSummary.scoreBefore}/100
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#7C3AED]" />
+                  <span className="font-bold text-[#172554] text-base">
+                    {analysis.reanalysisSummary.scoreAfter}/100
+                  </span>
+                  <span className="text-xs text-[#64748B]">
+                    (
+                    {analysis.reanalysisSummary.scoreDelta === 0
+                      ? 'no change'
+                      : `${analysis.reanalysisSummary.scoreDelta > 0 ? '+' : ''}${analysis.reanalysisSummary.scoreDelta}`}
+                    )
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-[#F8FAFF] border border-[#DCE8F8] p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#52607A]">
+                  Classification
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-[#64748B]">
+                    {analysis.reanalysisSummary.classificationBefore}
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#7C3AED] shrink-0" />
+                  <span className="font-semibold text-[#172554]">
+                    {analysis.reanalysisSummary.classificationAfter}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-[#F8FAFF] border border-[#DCE8F8] p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#52607A]">
+                  Evidence Strength
+                </p>
+                <div className="mt-2 flex items-center gap-2 text-xs">
+                  <span className="text-[#64748B]">
+                    {analysis.reanalysisSummary.evidenceStrengthBefore}
+                  </span>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#7C3AED]" />
+                  <span className="font-semibold text-[#172554]">
+                    {analysis.reanalysisSummary.evidenceStrengthAfter}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Confidence Adjustment Justification */}
+            <div className="rounded-xl bg-[#EFF6FF]/70 border border-[#BFDBFE] p-4 text-xs text-[#1E3A8A] leading-relaxed">
+              <span className="font-semibold">Confidence score basis: </span>
+              {analysis.reanalysisSummary.adjustmentJustification}
+            </div>
+
+            {/* Two-Column Split: Original Automated Findings + What Changed vs User-Provided Context */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              {/* Left: Objective Original Findings & Delta */}
+              <div className="lg:col-span-6 space-y-4">
+                <div className="rounded-xl bg-white/90 border border-[#DCE8F8] p-4 space-y-2">
+                  <p className="text-xs font-semibold text-[#172554]">
+                    What Changed Between Original and Updated Analysis
+                  </p>
+                  <ul className="space-y-1.5 text-xs text-[#52607A] list-disc pl-4 leading-relaxed">
+                    {analysis.reanalysisSummary.whatChanged.map((item, idx) => (
+                      <li key={idx}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {analysis.originalSnapshot && (
+                  <div className="rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] p-4 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-[#172554]">
+                        Original Automated Analysis Snapshot
+                      </p>
+                      <span className="text-[11px] font-mono text-[#64748B]">
+                        {formatDateTime(analysis.originalSnapshot.capturedAt)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#52607A] leading-relaxed">
+                      {analysis.originalSnapshot.executiveSummary}
+                    </p>
+                    <p className="text-[11px] font-mono text-[#64748B] pt-1">
+                      Original automated counts:{' '}
+                      {analysis.originalSnapshot.evidenceSupportingAi.length} AI-supporting ·{' '}
+                      {analysis.originalSnapshot.evidenceSupportingNaturalCapture.length}{' '}
+                      natural-capture · {analysis.originalSnapshot.conflictingFindings.length}{' '}
+                      conflicts
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Strictly Separated User-Provided Context & Statement */}
+              <div className="lg:col-span-6 rounded-xl bg-[#FAF5FF]/90 border border-[#DDD6FE] p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-[#6D28D9]" />
+                    <h3 className="text-xs font-bold uppercase tracking-wide text-[#4C1D95]">
+                      User-Provided Context &amp; Statement
+                    </h3>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-[#6D28D9] bg-white border border-[#DDD6FE] rounded-md px-2 py-0.5">
+                    <ShieldAlert className="w-3 h-3" />
+                    Not independently verified evidence
+                  </span>
+                </div>
+
+                {analysis.userContext.answers.length > 0 && (
+                  <div className="space-y-2.5">
+                    <p className="text-[11px] font-semibold text-[#5B21B6]">
+                      Follow-Up Responses Provided by User
+                    </p>
+                    <div className="space-y-2">
+                      {analysis.userContext.answers.map((ans) => (
+                        <div
+                          key={ans.questionId}
+                          className="rounded-lg bg-white/90 border border-[#E9D5FF] px-3.5 py-2.5 text-xs"
+                        >
+                          <p className="font-medium text-[#52607A]">{ans.question}</p>
+                          <p className="mt-1 font-semibold text-[#172554]">{ans.answer}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {analysis.userContext.userStatement && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold text-[#5B21B6]">
+                      User Statement (Verbatim — User-Reported)
+                    </p>
+                    <blockquote className="rounded-lg bg-white/95 border-l-3 border-[#7C3AED] px-3.5 py-2.5 text-xs text-[#172554] leading-relaxed whitespace-pre-wrap">
+                      “{analysis.userContext.userStatement}”
+                    </blockquote>
+                  </div>
+                )}
+
+                <p className="text-[11px] leading-relaxed text-[#5B21B6]/90 pt-2 border-t border-[#E9D5FF]">
+                  <strong>Evidentiary boundary:</strong>{' '}
+                  {analysis.reanalysisSummary.epistemicSeparationNote}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1020,95 +1235,379 @@ export function ForensicReportView({
           </div>
         )}
 
-      {analysis.mediaType === 'audio' && analysis.audioProfile && (
+      {(analysis.mediaType === 'audio' || analysis.mediaType === 'video') && analysis.audioProfile && (
         <div className="tl-glass-panel rounded-2xl p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-[#172554]">
-                Acoustic Waveform &amp; Timestamped Observations
-              </h2>
-              <p className="mt-0.5 text-xs text-[#64748B]">
-                Decoded via FFmpeg 16 kHz mono PCM for deterministic loudness, silence, and DFT
-                spectral measurements
-              </p>
-            </div>
-            {analysis.mediaRetained && analysis.previewUrl && (
-              <audio ref={audioPlayerRef} src={analysis.previewUrl} controls className="h-9" />
-            )}
-          </div>
+          {(() => {
+            const ap = analysis.audioProfile!;
+            const pd = ap.primaryDetector;
+            const sup = ap.supportingSignals;
+            const playableAudioUrl =
+              analysis.mediaType === 'video'
+                ? analysis.extractedAudioUrl
+                : analysis.mediaRetained
+                  ? analysis.previewUrl
+                  : undefined;
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
-            {[
-              [
-                'Spectral Centroid',
-                analysis.audioProfile.spectralCentroidHz
-                  ? `${analysis.audioProfile.spectralCentroidHz} Hz`
-                  : 'N/A',
-              ],
-              ['Silence Ratio', `${(analysis.audioProfile.silenceRatio * 100).toFixed(1)}%`],
-              ['Dynamic Range', `${analysis.audioProfile.dynamicRangeDb} dB`],
-              ['Clipping Rate', `${(analysis.audioProfile.clippingRate * 100).toFixed(2)}%`],
-            ].map(([label, val]) => (
-              <div key={label} className="bg-[#F5F7FB] border border-[#E5EAF2] rounded-lg p-3">
-                <p className="text-[11px] text-[#64748B]">{label}</p>
-                <p className="mt-1 text-sm font-semibold font-mono tabular-nums text-[#172554]">
-                  {val}
-                </p>
-              </div>
-            ))}
-          </div>
+            const catTone =
+              ap.assessmentCategory === 'Likely synthetic or spoofed speech'
+                ? 'bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C]'
+                : ap.assessmentCategory === 'Likely genuine human speech'
+                  ? 'bg-[#F0FDF4] border-[#BBF7D0] text-[#15803D]'
+                  : ap.assessmentCategory === 'Analysis unavailable because of a technical failure'
+                    ? 'bg-[#FEF2F2] border-[#FCA5A5] text-[#991B1B]'
+                    : 'bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]';
 
-          <div className="h-[150px] w-full bg-[#F5F7FB] border border-[#E5EAF2] rounded-lg p-3">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={analysis.audioProfile.waveformPeaks.map((peak, idx) => ({
-                  bin: idx + 1,
-                  amplitude: peak,
-                }))}
-              >
-                <XAxis dataKey="bin" hide />
-                <YAxis domain={[0, 1]} hide />
-                <Tooltip
-                  formatter={(v) => [`${Number(v).toFixed(3)}`, 'Peak Amplitude']}
-                  contentStyle={{ fontSize: '11px', borderRadius: '6px' }}
-                />
-                <Bar dataKey="amplitude" fill="#2563EB" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {analysis.audioProfile.segments.length > 0 && (
-            <div className="divide-y divide-[#E5EAF2] border border-[#E5EAF2] rounded-lg">
-              {analysis.audioProfile.segments.map((seg, i) => {
-                const isClickable = Boolean(analysis.mediaRetained && analysis.previewUrl);
-                const isActive = activeAudioSec === seg.startSec;
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    disabled={!isClickable}
-                    onClick={() => seekAudioSegment(seg.startSec)}
-                    className={`w-full text-left px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-colors ${
-                      isClickable ? 'hover:bg-[#F5F7FB] cursor-pointer' : ''
-                    } ${isActive ? 'bg-[#2563EB]/5' : ''}`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="inline-flex items-center gap-1.5 font-mono tabular-nums font-semibold text-[#2563EB]">
-                        {isClickable && <Play className="w-3 h-3 fill-current" />}
-                        {seg.timestampLabel}
-                      </span>
-                      <span className="text-[#64748B]">{seg.observation}</span>
+            return (
+              <>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-base font-semibold text-[#172554]">
+                        {ap.sourceTrack === 'extracted_video_audio'
+                          ? 'Extracted Video Audio Track — Deepfake Speech Detection'
+                          : 'Audio Anti-Spoofing & Overlapping Segment Analysis'}
+                      </h2>
+                      {ap.assessmentCategory && (
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-md border text-[11px] font-semibold ${catTone}`}
+                        >
+                          {ap.assessmentCategory}
+                        </span>
+                      )}
                     </div>
-                    {seg.rmsDb !== 0 && (
-                      <span className="font-mono tabular-nums text-[#64748B] whitespace-nowrap">
-                        RMS {seg.rmsDb} dB · ZCR {seg.zeroCrossingRate}
-                      </span>
+                    <p className="mt-1 text-xs text-[#64748B]">
+                      {ap.sourceTrack === 'extracted_video_audio'
+                        ? 'Extracted from uploaded video via FFmpeg (16 kHz mono WAV) and evaluated independently using the same pretrained Wav2Vec2 audio anti-spoofing classifier.'
+                        : 'Decoded via FFmpeg to 16 kHz mono PCM, segmented into overlapping windows, and evaluated by a pretrained Wav2Vec2 audio deepfake classifier.'}
+                    </p>
+                  </div>
+                  {playableAudioUrl && (
+                    <audio ref={audioPlayerRef} src={playableAudioUrl} controls className="h-9" />
+                  )}
+                </div>
+
+                {/* Primary Pretrained Audio Detector Card (PDF Sections 2, 3, 4, 10) */}
+                {pd && (
+                  <div className="rounded-xl bg-gradient-to-br from-[#F8FAFC] to-[#EFF6FF]/60 border border-[#DCE8F8] p-4 space-y-3">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[#5B21B6]">
+                          Primary Trained Audio Classifier (Not Gemini Prompt)
+                        </p>
+                        <p className="text-sm font-semibold text-[#172554] font-mono">
+                          {pd.modelId}{' '}
+                          <span className="font-sans text-xs font-normal text-[#64748B]">
+                            · License: {pd.license} · Backend: {pd.backend}
+                          </span>
+                        </p>
+                        {pd.modelBase && (
+                          <p className="text-xs text-[#64748B]">
+                            Architecture / Base: {pd.modelBase} · Input: {pd.inputSpec}
+                          </p>
+                        )}
+                      </div>
+                      <div className="md:text-right shrink-0">
+                        <p className="text-[11px] text-[#64748B]">
+                          Raw Aggregated Score (Uncalibrated)
+                        </p>
+                        <p className="text-lg font-bold font-mono tabular-nums text-[#172554]">
+                          {pd.rawAggregatedScore !== null
+                            ? `${(pd.rawAggregatedScore * 100).toFixed(1)}% synthetic/spoof`
+                            : pd.status === 'technical_failure'
+                              ? 'Technical Failure'
+                              : 'Insufficient Speech'}
+                        </p>
+                        <p className="text-[11px] text-[#64748B]">
+                          Not a calibrated real-world probability
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#DCE8F8]/80 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-[#52607A]">
+                      <div>
+                        <span className="font-semibold text-[#172554]">Documented Aggregation: </span>
+                        {pd.aggregationMethod}
+                      </div>
+                      <div className="font-mono tabular-nums">
+                        <span className="font-sans font-semibold text-[#172554]">Segmentation: </span>
+                        {pd.segmentWindowSec}s window / {pd.segmentHopSec}s hop · {pd.segmentsEvaluated}{' '}
+                        evaluated ({pd.speechActiveSegments} speech-active) · {pd.inferenceDurationMs} ms
+                      </div>
+                    </div>
+
+                    {pd.errorDetail && (
+                      <div className="rounded-lg bg-[#FEF2F2] border border-[#FECACA] px-3 py-2 text-xs text-[#991B1B]">
+                        <span className="font-semibold">Technical Failure Detail: </span>
+                        {pd.errorDetail} (Technical failures are never reported as synthetic-speech detections.)
+                      </div>
                     )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                  </div>
+                )}
+
+                {/* Key Acoustic Telemetry Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+                  {[
+                    [
+                      'Spectral Centroid',
+                      ap.spectralCentroidHz ? `${ap.spectralCentroidHz} Hz` : 'N/A',
+                    ],
+                    ['Silence Ratio', `${(ap.silenceRatio * 100).toFixed(1)}%`],
+                    ['Dynamic Range', `${ap.dynamicRangeDb} dB`],
+                    ['Clipping Rate', `${(ap.clippingRate * 100).toFixed(2)}%`],
+                    [
+                      'Noise Floor',
+                      ap.noiseFloorDb !== undefined && ap.noiseFloorDb !== null
+                        ? `${ap.noiseFloorDb} dB`
+                        : 'N/A',
+                    ],
+                    [
+                      'Est. Voiced Pitch (F0)',
+                      sup?.pitchMeanHz ? `${sup.pitchMeanHz} Hz` : 'N/A',
+                    ],
+                  ].map(([label, val]) => (
+                    <div key={label} className="bg-[#F5F7FB] border border-[#E5EAF2] rounded-lg p-3">
+                      <p className="text-[11px] text-[#64748B]">{label}</p>
+                      <p className="mt-1 text-sm font-semibold font-mono tabular-nums text-[#172554]">
+                        {val}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Waveform Envelope */}
+                {ap.waveformPeaks.length > 0 && (
+                  <div className="h-[140px] w-full bg-[#F5F7FB] border border-[#E5EAF2] rounded-lg p-3">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={ap.waveformPeaks.map((peak, idx) => ({
+                          bin: idx + 1,
+                          amplitude: peak,
+                        }))}
+                      >
+                        <XAxis dataKey="bin" hide />
+                        <YAxis domain={[0, 1]} hide />
+                        <Tooltip
+                          formatter={(v) => [`${Number(v).toFixed(3)}`, 'Peak Amplitude']}
+                          contentStyle={{ fontSize: '11px', borderRadius: '6px' }}
+                        />
+                        <Bar dataKey="amplitude" fill="#2563EB" radius={[2, 2, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Supporting Forensic Signals (PDF Section 5 — Explicitly Supporting, NOT Standalone Proof) */}
+                {sup && (
+                  <div className="rounded-xl border border-[#E5EAF2] bg-white/80 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-[#172554]">
+                        Supporting Acoustic &amp; Forensic Observations (Not Standalone Proof)
+                      </h3>
+                      <span className="text-[11px] text-[#64748B]">
+                        Contextual evidence only — never overrides primary classifier
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-[#52607A]">
+                      {sup.melBandSummary && (
+                        <div className="bg-[#F8FAFC] border border-[#E5EAF2] rounded-lg p-3">
+                          <p className="font-semibold text-[#172554] mb-1">
+                            Frequency / Mel-Band Distribution
+                          </p>
+                          <p className="leading-relaxed">{sup.melBandSummary}</p>
+                        </div>
+                      )}
+                      {sup.pitchProsodySummary && (
+                        <div className="bg-[#F8FAFC] border border-[#E5EAF2] rounded-lg p-3">
+                          <p className="font-semibold text-[#172554] mb-1">
+                            Pitch, Prosody, Rhythm &amp; Pauses
+                          </p>
+                          <p className="leading-relaxed">{sup.pitchProsodySummary}</p>
+                        </div>
+                      )}
+                      {sup.acousticArtifactsSummary && (
+                        <div className="bg-[#F8FAFC] border border-[#E5EAF2] rounded-lg p-3">
+                          <p className="font-semibold text-[#172554] mb-1">
+                            Acoustic Artifacts &amp; Noise Floor
+                          </p>
+                          <p className="leading-relaxed">{sup.acousticArtifactsSummary}</p>
+                        </div>
+                      )}
+                      {sup.editSpliceSummary && (
+                        <div className="bg-[#F8FAFC] border border-[#E5EAF2] rounded-lg p-3">
+                          <p className="font-semibold text-[#172554] mb-1">
+                            Edit / Splice Boundary Transitions
+                          </p>
+                          <p className="leading-relaxed">{sup.editSpliceSummary}</p>
+                        </div>
+                      )}
+                      {sup.codecMetadataSummary && (
+                        <div className="bg-[#F8FAFC] border border-[#E5EAF2] rounded-lg p-3 md:col-span-2">
+                          <p className="font-semibold text-[#172554] mb-1">
+                            Codec &amp; Container Metadata Context
+                          </p>
+                          <p className="leading-relaxed">{sup.codecMetadataSummary}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Detected Indicators vs Uncertain Signals vs Natural Cues */}
+                {(ap.detectedIndicators?.length ||
+                  ap.uncertainSignals?.length ||
+                  ap.naturalCues?.length) && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="rounded-xl bg-[#FEF2F2]/70 border border-[#FECACA] p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold text-[#B91C1C]">
+                          Synthetic / Spoof Indicators
+                        </h3>
+                        <span className="text-[11px] font-mono text-[#991B1B]">
+                          {ap.detectedIndicators?.length ?? 0}
+                        </span>
+                      </div>
+                      <ul className="mt-2.5 space-y-1.5 text-xs text-[#7F1D1D]/90 list-disc pl-4 leading-relaxed">
+                        {ap.detectedIndicators && ap.detectedIndicators.length > 0 ? (
+                          ap.detectedIndicators.map((item, idx) => <li key={idx}>{item}</li>)
+                        ) : (
+                          <li className="text-[#64748B]">
+                            No primary synthetic-speech indicators crossed threshold.
+                          </li>
+                        )}
+                      </ul>
+                    </div>
+
+                    <div className="rounded-xl bg-[#FFFBEB]/80 border border-[#FDE68A] p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold text-[#92400E]">
+                          Uncertain / Contextual Cues
+                        </h3>
+                        <span className="text-[11px] font-mono text-[#92400E]">
+                          {ap.uncertainSignals?.length ?? 0}
+                        </span>
+                      </div>
+                      <ul className="mt-2.5 space-y-1.5 text-xs text-[#92400E]/90 list-disc pl-4 leading-relaxed">
+                        {ap.uncertainSignals && ap.uncertainSignals.length > 0 ? (
+                          ap.uncertainSignals.map((item, idx) => <li key={idx}>{item}</li>)
+                        ) : (
+                          <li className="text-[#64748B]">No isolated or ambiguous audio cues recorded.</li>
+                        )}
+                      </ul>
+                    </div>
+
+                    <div className="rounded-xl bg-[#F0FDF4]/80 border border-[#BBF7D0] p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold text-[#15803D]">
+                          Genuine / Natural Speech Cues
+                        </h3>
+                        <span className="text-[11px] font-mono text-[#166534]">
+                          {ap.naturalCues?.length ?? 0}
+                        </span>
+                      </div>
+                      <ul className="mt-2.5 space-y-1.5 text-xs text-[#166534]/90 list-disc pl-4 leading-relaxed">
+                        {ap.naturalCues && ap.naturalCues.length > 0 ? (
+                          ap.naturalCues.map((item, idx) => <li key={idx}>{item}</li>)
+                        ) : (
+                          <li className="text-[#64748B]">No explicit natural speech cues logged.</li>
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-Segment Raw Model Outputs (PDF Sections 4 & 10) */}
+                {ap.segments.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-[#172554]">
+                        Overlapping Segment-Level Findings ({ap.segments.length} segment
+                        {ap.segments.length === 1 ? '' : 's'})
+                      </h3>
+                      <span className="text-[11px] text-[#64748B]">
+                        Click any segment to jump audio playback
+                      </span>
+                    </div>
+                    <div className="divide-y divide-[#E5EAF2] border border-[#E5EAF2] rounded-lg overflow-hidden">
+                      {ap.segments.map((seg, i) => {
+                        const isClickable = Boolean(playableAudioUrl);
+                        const isActive = activeAudioSec === seg.startSec;
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            disabled={!isClickable}
+                            onClick={() => seekAudioSegment(seg.startSec)}
+                            className={`w-full text-left px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-colors ${
+                              isClickable ? 'hover:bg-[#F5F7FB] cursor-pointer' : ''
+                            } ${isActive ? 'bg-[#2563EB]/5' : seg.flagged ? 'bg-[#FEF2F2]/40' : ''}`}
+                          >
+                            <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                              <span className="inline-flex items-center gap-1.5 font-mono tabular-nums font-semibold text-[#2563EB] shrink-0">
+                                {isClickable && <Play className="w-3 h-3 fill-current" />}
+                                {seg.timestampLabel}
+                              </span>
+                              {seg.isSpeechActive === false ? (
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#64748B]">
+                                  Low-energy
+                                </span>
+                              ) : seg.rawModelScore !== null && seg.rawModelScore !== undefined ? (
+                                <span
+                                  className={`text-[11px] font-mono tabular-nums font-semibold px-1.5 py-0.5 rounded ${
+                                    seg.flagged
+                                      ? 'bg-[#FEE2E2] text-[#B91C1C]'
+                                      : seg.rawModelScore < 0.38
+                                        ? 'bg-[#DCFCE7] text-[#15803D]'
+                                        : 'bg-[#FEF3C7] text-[#92400E]'
+                                  }`}
+                                >
+                                  Raw {(seg.rawModelScore * 100).toFixed(1)}% ({seg.rawModelLabel})
+                                </span>
+                              ) : null}
+                              <span className="text-[#52607A]">{seg.observation}</span>
+                            </div>
+                            <span className="font-mono tabular-nums text-[11px] text-[#64748B] whitespace-nowrap shrink-0">
+                              RMS {seg.rmsDb} dB · ZCR {seg.zeroCrossingRate}
+                              {seg.pitchEstimateHz ? ` · F0 ${seg.pitchEstimateHz} Hz` : ''}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Audio Processing Limitations & Implemented vs Unavailable Disclosure */}
+                {(ap.processingLimitations?.length || ap.experimentalMethodsDisclosed?.length) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                    {ap.processingLimitations && ap.processingLimitations.length > 0 && (
+                      <div className="rounded-xl bg-[#F8FAFC] border border-[#E5EAF2] p-4">
+                        <h3 className="text-xs font-semibold text-[#172554] mb-1.5">
+                          Audio Processing Limitations
+                        </h3>
+                        <ul className="space-y-1 text-xs text-[#64748B] list-disc pl-4 leading-relaxed">
+                          {ap.processingLimitations.map((lim, idx) => (
+                            <li key={idx}>{lim}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {ap.experimentalMethodsDisclosed && ap.experimentalMethodsDisclosed.length > 0 && (
+                      <div className="rounded-xl bg-[#F8FAFC] border border-[#E5EAF2] p-4">
+                        <h3 className="text-xs font-semibold text-[#172554] mb-1.5">
+                          Implemented vs. Unavailable Audio Capabilities
+                        </h3>
+                        <ul className="space-y-1 text-xs text-[#64748B] list-disc pl-4 leading-relaxed">
+                          {ap.experimentalMethodsDisclosed.map((m, idx) => (
+                            <li key={idx}>{m}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 

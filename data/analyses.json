@@ -74,9 +74,8 @@
         "detail": "Forensic report compiled and persisted."
       }
     ],
-    "mediaRetained": true,
+    "mediaRetained": false,
     "mediaExpiresAt": "2026-11-20T19:30:59.735Z",
-    "previewUrl": "/api/analyses/TL-MWNY3ZF9-7654/media",
     "detectors": [
       {
         "id": "ai_image_classification",
@@ -848,9 +847,8 @@
         "detail": "Forensic report compiled and persisted."
       }
     ],
-    "mediaRetained": true,
+    "mediaRetained": false,
     "mediaExpiresAt": "2026-11-20T19:05:44.143Z",
-    "previewUrl": "/api/analyses/TL-MWNX7HZH-7D81/media",
     "detectors": [
       {
         "id": "ai_image_classification",
@@ -1625,9 +1623,8 @@
         "detail": "Forensic report compiled and persisted."
       }
     ],
-    "mediaRetained": true,
+    "mediaRetained": false,
     "mediaExpiresAt": "2026-11-20T19:04:47.899Z",
-    "previewUrl": "/api/analyses/TL-MWNX6AL6-88F5/media",
     "detectors": [
       {
         "id": "ai_image_classification",
@@ -2382,9 +2379,8 @@
         "detail": "Forensic report compiled and persisted."
       }
     ],
-    "mediaRetained": true,
+    "mediaRetained": false,
     "mediaExpiresAt": "2026-11-20T19:03:57.994Z",
-    "previewUrl": "/api/analyses/TL-MWNX582S-6980/media",
     "detectors": [
       {
         "id": "video_frame_extraction",

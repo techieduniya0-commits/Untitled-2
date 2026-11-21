@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { Type, ThinkingLevel } from '@google/genai';
 import sharp from 'sharp';
 import type {
+  AudioProfile,
   DetectorResult,
   EvidencePolarity,
   ExtractedMetadata,
@@ -12,6 +13,7 @@ import type {
   VideoFrameSample,
   WatermarkFinding,
 } from '../../src/types/forensics.ts';
+import { runAudioDetectionPipeline } from '../audioDetection/index.ts';
 import { MAX_IMAGE_PIXELS } from '../fileValidation.ts';
 import {
   type ForensicContentPart,
@@ -356,10 +358,57 @@ export interface VideoPipelineOutput {
   videoFrames: VideoFrameSample[];
   videoSamplingStrategy: string;
   videoTelemetry: VideoForensicTelemetry;
+  audioProfile?: AudioProfile;
+  extractedAudioUrl?: string;
   geminiStatus: 'completed' | 'partially_completed' | 'failed';
   geminiModelUsed: string | null;
   geminiFailureDetail: string | null;
   reusedCachedFrames: boolean;
+}
+
+async function extractVideoAudioTrackToWav(
+  filePath: string,
+  outWavPath: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await execFileAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-v',
+        'error',
+        '-err_detect',
+        'ignore_err',
+        '-i',
+        filePath,
+        '-vn',
+        '-map',
+        '0:a:0',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-c:a',
+        'pcm_s16le',
+        '-t',
+        '120',
+        outWavPath,
+      ],
+      { timeout: 35_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const stat = await fs.stat(outWavPath);
+    if (stat.size <= 44) {
+      await fs.rm(outWavPath, { force: true }).catch(() => undefined);
+      return { ok: false, error: 'Extracted audio track contained no PCM samples.' };
+    }
+    return { ok: true };
+  } catch (err) {
+    await fs.rm(outWavPath, { force: true }).catch(() => undefined);
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'FFmpeg failed to extract video audio track.',
+    };
+  }
 }
 
 export async function runVideoDetectionPipeline(options: {
@@ -367,6 +416,7 @@ export async function runVideoDetectionPipeline(options: {
   filePath: string;
   framesOutputDir: string;
   cropsOutputDir: string;
+  audioOutputDir?: string;
   metadata: ExtractedMetadata;
   provenance: ProvenanceInspectionOutput;
   targetFrameCount: number;
@@ -383,6 +433,7 @@ export async function runVideoDetectionPipeline(options: {
     filePath,
     framesOutputDir,
     cropsOutputDir,
+    audioOutputDir,
     metadata,
     provenance,
     targetFrameCount,
@@ -442,31 +493,101 @@ export async function runVideoDetectionPipeline(options: {
 
   let sampleTimestamps: number[] = extractedFrames.map((f) => f.timestampSec);
 
+  /**
+   * Format-agnostic resilient frame extractor:
+   * Decodes via FFmpeg to 8-bit RGB PNG (eliminates 10-bit HEVC/HDR/BT.2020/yuv444p MJPEG encoder crashes)
+   * and converts cleanly to JPEG via sharp. Uses 3-tier seek strategy (fast seek -> accurate seek -> unfiltered decode).
+   */
   const extractSingleFrame = async (ts: number, outPath: string): Promise<boolean> => {
-    try {
-      await execFileAsync(
-        'ffmpeg',
-        [
-          '-y',
-          '-ss',
-          String(ts),
-          '-i',
-          filePath,
-          '-frames:v',
-          '1',
-          '-vf',
-          'scale=960:-2',
-          '-q:v',
-          '3',
-          outPath,
-        ],
-        { timeout: 20_000 },
-      );
-      const stat = await fs.stat(outPath);
-      return stat.size > 0;
-    } catch {
-      return false;
+    const tmpPng = `${outPath}.png`;
+    const attempts: string[][] = [
+      // Tier 1: Fast keyframe seek with safe scale & rgb24 conversion
+      [
+        '-y',
+        '-v',
+        'error',
+        '-err_detect',
+        'ignore_err',
+        '-ss',
+        String(Math.max(0, ts)),
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-frames:v',
+        '1',
+        '-vf',
+        "scale='min(960,iw)':-2,format=rgb24",
+        '-f',
+        'image2',
+        '-vcodec',
+        'png',
+        tmpPng,
+      ],
+      // Tier 2: Accurate output seek (handles VFR, MKV, AVI, FLV, MPEG-TS, moov-at-end MP4s)
+      [
+        '-y',
+        '-v',
+        'error',
+        '-err_detect',
+        'ignore_err',
+        '-i',
+        filePath,
+        '-ss',
+        String(Math.max(0, ts)),
+        '-map',
+        '0:v:0',
+        '-frames:v',
+        '1',
+        '-vf',
+        "scale='min(960,iw)':-2,format=rgb24",
+        '-f',
+        'image2',
+        '-vcodec',
+        'png',
+        tmpPng,
+      ],
+      // Tier 3: Minimal filter fallback (handles tiny/unusual aspect ratios or non-standard SAR)
+      [
+        '-y',
+        '-v',
+        'error',
+        '-err_detect',
+        'ignore_err',
+        '-i',
+        filePath,
+        '-ss',
+        String(Math.max(0, ts)),
+        '-frames:v',
+        '1',
+        '-pix_fmt',
+        'rgb24',
+        '-f',
+        'image2',
+        '-vcodec',
+        'png',
+        tmpPng,
+      ],
+    ];
+
+    for (const args of attempts) {
+      try {
+        await execFileAsync('ffmpeg', args, { timeout: 25_000, maxBuffer: 4 * 1024 * 1024 });
+        const stat = await fs.stat(tmpPng);
+        if (stat.size > 0) {
+          await sharp(tmpPng, { limitInputPixels: MAX_IMAGE_PIXELS })
+            .resize({ width: 960, height: 960, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 88 })
+            .toFile(outPath);
+          await fs.rm(tmpPng, { force: true }).catch(() => undefined);
+          const jpgStat = await fs.stat(outPath);
+          if (jpgStat.size > 0) return true;
+        }
+      } catch {
+        await fs.rm(tmpPng, { force: true }).catch(() => undefined);
+      }
     }
+    return false;
   };
 
   if (!reusedCachedFrames) {
@@ -478,7 +599,7 @@ export async function runVideoDetectionPipeline(options: {
     if (duration <= 1.2) {
       const count = 4;
       for (let i = 0; i < count; i++) {
-        sampleTimestamps.push(Number(((i / count) * Math.max(0.4, duration * 0.9)).toFixed(2)));
+        sampleTimestamps.push(Number(((i / count) * Math.max(0.2, duration * 0.85)).toFixed(2)));
       }
     } else {
       const margin = Math.min(0.35, duration * 0.05);
@@ -524,19 +645,78 @@ export async function runVideoDetectionPipeline(options: {
     }
 
     if (rawFrames.length === 0) {
-      const fallbackOut = path.join(framesOutputDir, 'frame_00.jpg');
-      await execFileAsync(
-        'ffmpeg',
-        ['-y', '-i', filePath, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '3', fallbackOut],
-        { timeout: 20_000 },
-      );
-      extractedFrames.push({
-        frameIndex: 0,
-        timestampSec: 0,
-        timestampLabel: '00:00.0',
-        filePath: fallbackOut,
-        thumbnailFile: 'frame_00.jpg',
-      });
+      // Final resilient fallback: decode sequential frames from start without seeking (handles unknown-duration WebM/MKV/TS/FLV/corrupted-index MP4)
+      const seqPattern = path.join(framesOutputDir, 'tmp_seq_%02d.png');
+      try {
+        await execFileAsync(
+          'ffmpeg',
+          [
+            '-y',
+            '-v',
+            'error',
+            '-err_detect',
+            'ignore_err',
+            '-i',
+            filePath,
+            '-vf',
+            "select='not(mod(n\\,10))',scale='min(960,iw)':-2,format=rgb24",
+            '-vsync',
+            'vfr',
+            '-frames:v',
+            String(Math.min(4, clampedCount)),
+            seqPattern,
+          ],
+          { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+        );
+      } catch {
+        // Fallback to single first frame with zero filters
+        await execFileAsync(
+          'ffmpeg',
+          [
+            '-y',
+            '-v',
+            'error',
+            '-err_detect',
+            'ignore_err',
+            '-i',
+            filePath,
+            '-frames:v',
+            '1',
+            '-pix_fmt',
+            'rgb24',
+            path.join(framesOutputDir, 'tmp_seq_01.png'),
+          ],
+          { timeout: 25_000, maxBuffer: 4 * 1024 * 1024 },
+        );
+      }
+
+      const files = (await fs.readdir(framesOutputDir))
+        .filter((f) => /^tmp_seq_\d+\.png$/.test(f))
+        .sort();
+      for (let i = 0; i < files.length; i++) {
+        const pngPath = path.join(framesOutputDir, files[i]);
+        const fileName = `frame_${String(i).padStart(2, '0')}.jpg`;
+        const finalPath = path.join(framesOutputDir, fileName);
+        await sharp(pngPath, { limitInputPixels: MAX_IMAGE_PIXELS })
+          .resize({ width: 960, height: 960, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 88 })
+          .toFile(finalPath);
+        await fs.rm(pngPath, { force: true }).catch(() => undefined);
+        const estTs = Number(((i * duration) / Math.max(1, files.length)).toFixed(2));
+        extractedFrames.push({
+          frameIndex: i,
+          timestampSec: estTs,
+          timestampLabel: formatTimestamp(estTs),
+          filePath: finalPath,
+          thumbnailFile: fileName,
+        });
+      }
+
+      if (extractedFrames.length === 0) {
+        throw new Error(
+          'FFmpeg could not decode any video frames from this container. The video codec may be corrupted or unsupported.',
+        );
+      }
     } else {
       for (let i = 0; i < rawFrames.length; i++) {
         const fileName = `frame_${String(i).padStart(2, '0')}.jpg`;
@@ -1469,6 +1649,81 @@ export async function runVideoDetectionPipeline(options: {
     provenance.synthIdDetector,
   ];
 
+  // PDF Section 6: Extract video audio track via FFmpeg and analyse independently with the SAME pretrained audio deepfake detector
+  let videoAudioProfile: AudioProfile | undefined;
+  let extractedAudioUrl: string | undefined;
+
+  if (hasAudioTrack && audioOutputDir) {
+    onStageProgress?.(
+      'forensic_analysis',
+      'Extracting video audio track via FFmpeg (16 kHz mono WAV) and running independent pretrained Wav2Vec2 audio deepfake detection.',
+    );
+    await fs.mkdir(audioOutputDir, { recursive: true });
+    const extractedWavPath = path.join(audioOutputDir, 'extracted_audio.wav');
+    const extracted = await extractVideoAudioTrackToWav(filePath, extractedWavPath);
+    if (extracted.ok) {
+      extractedAudioUrl = `/api/analyses/${analysisId}/audio`;
+      try {
+        const audioRes = await runAudioDetectionPipeline({
+          filePath: extractedWavPath,
+          metadata,
+          provenance,
+          sourceTrack: 'extracted_video_audio',
+          skipGeminiExplanation: true, // Video report narrative synthesizes both independent tracks cleanly
+          onStageProgress,
+        });
+        videoAudioProfile = audioRes.audioProfile;
+        detectors.push(...audioRes.detectors);
+      } catch (audioErr) {
+        detectors.push({
+          id: 'video_audio_deepfake_classifier',
+          methodName: '[Video Audio Track] Pretrained Audio Deepfake Classifier (Wav2Vec2)',
+          category: 'signal',
+          status: 'failed',
+          ran: false,
+          resultSummary: `Analysis unavailable because of a technical failure — extracted video audio track could not be classified: ${audioErr instanceof Error ? audioErr.message : String(audioErr)}`,
+          rawSignalScore: null,
+          signalPolarity: 'neutral',
+          reliability: 'High',
+          reliabilityWeight: 0.85,
+          calibrationStatus: 'Uncalibrated (Experimental)',
+          applicability: 'Independent speech anti-spoofing analysis on extracted video audio track',
+          evidenceStrength: 'Low',
+          evidence: ['Video frame analysis completed independently; audio track classification failed and was excluded from scoring.'],
+          limitations: ['Technical failures are never treated as synthetic-speech evidence.'],
+          toolUsed: 'FFmpeg Audio Extractor + Pretrained Wav2Vec2 Classifier',
+          correlationGroup: 'video_audio_pretrained_audio_antispoofing',
+          providerGroup: 'trained_audio_model',
+          durationMs: 0,
+          detectorVersion: '4.0',
+        });
+      }
+    } else {
+      detectors.push({
+        id: 'video_audio_deepfake_classifier',
+        methodName: '[Video Audio Track] Pretrained Audio Deepfake Classifier (Wav2Vec2)',
+        category: 'signal',
+        status: 'failed',
+        ran: false,
+        resultSummary: `Analysis unavailable because of a technical failure — FFmpeg could not extract audio track from video: ${extracted.error}`,
+        rawSignalScore: null,
+        signalPolarity: 'neutral',
+        reliability: 'High',
+        reliabilityWeight: 0.85,
+        calibrationStatus: 'Uncalibrated (Experimental)',
+        applicability: 'Independent speech anti-spoofing analysis on extracted video audio track',
+        evidenceStrength: 'Low',
+        evidence: [`Video audio stream (${metadata.audioCodec}) extraction failed: ${extracted.error}`],
+        limitations: ['Video frame forensics remain unaffected; audio track failure is excluded from scoring.'],
+        toolUsed: 'FFmpeg Audio Track Extractor',
+        correlationGroup: 'video_audio_pretrained_audio_antispoofing',
+        providerGroup: 'trained_audio_model',
+        durationMs: 0,
+        detectorVersion: '4.0',
+      });
+    }
+  }
+
   const geminiStatus: 'completed' | 'partially_completed' | 'failed' =
     aiVideo && wmResult.geminiSucceeded
       ? 'completed'
@@ -1497,6 +1752,8 @@ export async function runVideoDetectionPipeline(options: {
       adaptiveSamplingApplied,
       interpolationNote: deltaStats.interpolationNote,
     },
+    audioProfile: videoAudioProfile,
+    extractedAudioUrl,
     geminiStatus,
     geminiModelUsed: aiVideoModelUsed ?? wmResult.geminiModelUsed,
     geminiFailureDetail: geminiErrors.length > 0 ? Array.from(new Set(geminiErrors)).join(' | ') : null,
